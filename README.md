@@ -1,13 +1,3 @@
-# DCC-GJR-GARCH
+# GJR-GARCH(1,1)
 
-This project showcases an advanced GARCH implementation in Python. It determines parameters defining the volatility of each stock's returns, the correlations between them, and then plugs this volatility model into a Monte Carlo simulation to model stock prices with leveraged, correlated volatility clustering.
-
-# GARCH
-
-## GARCH(1,1)
-
-## Monte Carlo
-
-# GJR-GARCH
-
-# DCC-GARCH
+This project showcases an advanced GARCH implementation in Python, GJR-GARCH(1,1). It pulls a stock's data from Yahoo Finance, determines the parameters best defining the variance of its returns, and then plugs this variance model into a Monte Carlo simulation to model future stock prices with asymmetric volatility clustering.
