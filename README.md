@@ -1,3 +1,13 @@
 # DCC-GJR-GARCH
 
-This project showcases an advanced Monte Carlo simulation implementation in VBA. It simulates price movements for multiple stocks, accounting for a few additional complexities (nonnormality, correlation, and nonstationarity) to achieve more realistic and useful results.
+This project showcases an advanced GARCH implementation in Python. It determines parameters defining the volatility of each stock's returns, the correlations between them, and then plugs this volatility model into a Monte Carlo simulation to model stock prices with leveraged, correlated volatility clustering.
+
+# GARCH
+
+## GARCH(1,1)
+
+## Monte Carlo
+
+# GJR-GARCH
+
+# DCC-GARCH
