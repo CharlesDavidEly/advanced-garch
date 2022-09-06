@@ -7,8 +7,18 @@ import scipy as sp
 
 
 
+# Model types:
+# ARCH(p) ->        𝛿 = 2, μ = mean, γ = 0, β = 0
+# GARCH(p,q) ->     𝛿 = 2, μ = mean, γ = 0
+# GJR-GARCH(p,q) -> 𝛿 = 2
+# APARCH(p,q) ->    NO ASSUMPTIONS
+
+'''
+'''
 # Specify the model
-model = "APARCH(1,1)"
+modelType = "APARCH"
+pGARCH = 1
+qGARCH = 1
 
 # Specify the sample
 ticker = "^GSPC"
@@ -17,12 +27,26 @@ end = "2021-12-31"
 
 # Specify the simulation days
 simDays = 100000
+'''
+'''
+
+# Add check on pGARCH's value here (must be int >= 1)
+if modelType == "ARCH":
+    modelName = modelType + "(" + str(pGARCH) + ")"
+    qGARCH = 0
+else:
+    modelName = modelType + "(" + str(pGARCH) + "," + str(qGARCH) + ")"
+    # Add check on qGARCH's value here (must be int >= 1)
+
+
 
 # Download data
 prices = yf.download(ticker,start,end)["Close"]
+priceNum = prices.shape[0]
 
 # Calculate returns
 returns = np.array(prices)[1:]/np.array(prices)[:-1] - 1
+returnNum = returns.shape[0]
 
 # Starting parameter values (sample μ and σ)
 mean = np.average(returns)
@@ -32,18 +56,40 @@ var = vol**2
 skew = sp.stats.skew(returns)
 kurt = sp.stats.kurtosis(returns)
 
-def aparch_mle(params):
+
+# Set up guesses
+
+#def aparch_mle(params):
+def aparch_mle(params,*args):
 
     # Specify model parameters
-    mu = params[0]
-    omega = params[1]
-    alpha = params[2]
-    gamma = params[3]
-    beta = params[4]
-    delta = params[5]
+    omega = params[0]
+    alpha = params[1]
+    match args[0]:
+        case "ARCH":
+            beta = args[6]
+            gamma = args[5]
+            mu = args[4]
+            delta = args[3]
+        case "GARCH":
+            beta = params[2]
+            gamma = args[5]
+            mu = args[4]
+            delta = args[3]
+        case "GJR-GARCH":
+            beta = params[2]
+            gamma = params[3]
+            mu = params[4]
+            delta = args[3]
+        case "APARCH":
+            # Change number here
+            beta = params[2]
+            gamma = params[3]
+            mu = params[4]
+            delta = params[5]
 
     # Calculate long-run volatility
-    long_run_var = omega/(1 - alpha * (1 - gamma)**delta - beta)
+    long_run_var = omega/(1 - alpha - beta)
     long_run_vol = long_run_var**(1/delta)
 
     # Calculate realized and conditional volatility
@@ -61,27 +107,64 @@ def aparch_mle(params):
 
 
 
-# Maximize log-likelihood
+# Handle bounds (later constraints)
 bMu = (-1,1)
 bOmega = (0,var)
 b = (0,1)
 bDelta = (0,10)
-res = sp.optimize.minimize(aparch_mle, [median,0,0,0,0.75,2], bounds=(bMu,bOmega,b,b,b,bDelta), method="Nelder-Mead")
+
+
+# Handle constantParams and initialGuesses
+match modelType:
+    case "ARCH":
+        #                                         𝛿  μ   γ β                   
+        constantParams = (modelType,pGARCH,qGARCH,2,mean,0,0)
+        #                 ω  α
+        initialGuesses = [0,0.5]
+        paramBounds = (bOmega,b)
+    case "GARCH":
+        constantParams = (modelType,pGARCH,qGARCH,2,mean,0)
+        initialGuesses = [0,0.2,0.7]
+        paramBounds = (bOmega,b,b)
+    case "GJR-GARCH":
+        constantParams = (modelType,pGARCH,qGARCH,2)
+        initialGuesses = [0,0.1,0.7,0.1,median]
+        paramBounds = (bOmega,b,b,b,bMu)
+    case "APARCH":
+        constantParams = (modelType,pGARCH,qGARCH)
+        initialGuesses = [0,0.1,0.7,0.1,median,2]
+        paramBounds = (bOmega,b,b,b,bMu,bDelta)
+
+# Maximize log-likelihood
+res = sp.optimize.minimize(aparch_mle,initialGuesses,args=constantParams,bounds=paramBounds,method="Nelder-Mead",options={"disp":True})
 # Alpha + gamma should = around 0.2
+
+
+# Set default parameters
+beta = 0
+gamma = 0
+mu = mean
+delta = 2
 
 # Retrieve optimal parameters
 params = res.x
-mu = res.x[0]
-omega = res.x[1]
-alpha = res.x[2]
-gamma = res.x[3]
-beta = res.x[4]
-delta = res.x[5]
+omega = res.x[0]
+alpha = res.x[1]
+if modelType != "ARCH":
+    beta = res.x[2]
+    if modelType != "GARCH":
+        gamma = res.x[3]
+        mu = res.x[4]
+        if modelType != "GJR-GARCH":
+            delta = res.x[5]
 log_likelihood = -float(res.fun)
+k = res.x.shape[0] + 1
+bic = k*np.log(returnNum) - 2*log_likelihood
+aic = 2*k - 2*log_likelihood
 
 # Calculate realized and conditional volatility for optimal parameters
-suitTest = alpha * (1 - gamma)**delta - beta
-long_run_var = omega/(1 - alpha * (1 - gamma)**delta - beta)
+suitTest = alpha + beta
+long_run_var = omega/(1 - alpha - beta)
 long_run_vol = long_run_var**(1/delta)
 resid = returns - mu
 realized = abs(resid)
@@ -91,24 +174,36 @@ for t in range(1,len(returns)):
     conditional[t] = (omega + alpha*(abs(resid[t-1]) - gamma*resid[t-1])**delta + beta*conditional[t-1]**delta)**(1/delta)
 
 # Print optimal parameters
-print(ticker + " " + model + " model parameters:")
-print("suit: " + str(round(suitTest,4)))
-print("mu: " + str(round(mu,6)))
+print("")
+print(ticker + " " + modelName + " model parameters:")
 print("omega: " + str(round(omega,6)))
 print("alpha: " + str(round(alpha,4)))
+if modelType == "ARCH":
+    print("---DEFAULTS---")
+print("beta:  " + str(round(beta,4)))
+if modelType == "GARCH":
+    print("---DEFAULTS---")
 print("gamma: " + str(round(gamma,4)))
-print("beta: " + str(round(beta,4)))
+print("mu:    " + str(round(mu,6)))
+if modelType == "GJR-GARCH":
+    print("---DEFAULTS---")
 print("delta: " + str(round(delta,4)))
-print("long-run vol: " + str(round(long_run_vol,4)))
+
+print("")
+print(ticker + " " + modelName + " model results:")
+print("suitability:    " + str(round(suitTest,4)))
+print("long-run vol:   " + str(round(long_run_vol,4)))
 print("log-likelihood: " + str(round(log_likelihood,4)))
+print("BIC:            " + str(round(bic,4)))
+print("AIC:            " + str(round(aic,4)))
 print("")
 
 # Visualize volatility
 plt.figure(1)
 plt.rc("xtick",labelsize=10)
-plt.plot(prices.index[1:],realized,label="Realized")
-plt.plot(prices.index[1:],conditional,label="Conditional")
-plt.title(label=ticker + " Volatility")
+plt.plot(prices.index[1:],realized,label="Empirical Realized")
+plt.plot(prices.index[1:],conditional,label=modelName + " Conditional")
+plt.title(label=ticker + " " + modelName + " Volatility")
 plt.legend()
 plt.show()
 
@@ -204,20 +299,20 @@ for t in range(simDays):
     GARCHVols[t] = actualSigma
 
 # Print Monte Carlo simulation
-print(ticker + " " + model + " Monte Carlo Simulation (" + str(1) + " " + str(simDays) + "-Day Runs):")
+print(ticker + " " + modelName + " Monte Carlo Simulation (" + str(1) + " " + str(simDays) + "-Day Runs):")
 print("   Actual   | Expected  | Error    | Commentary")
 print("μ: " + f"{actualMu:.6f}" + " | " + f"{mean:.6f}" + "  | " + muDir + f"{muError:.2f}" + "%" + "   | Should be equal on average")
 print("σ: " + f"{actualSigma:.6f}" + " | " + f"{vol:.6f}" + "  | " + sigmaDir + f"{sigmaError:.2f}" + "%" + "   | Should be equal on average")
-print("S: " + f"{actualSkew:.6f}" + " | " + f"{skew:.6f}" + " | " + skewDir + f"{skewError:.2f}" + "%" + " | Should be wrong (vol clustering actually tends to push it up from the sim default of 0 for some reason)")
+print("S: " + f"{actualSkew:.6f}" + " | " + f"{skew:.6f}" + " | " + skewDir + f"{skewError:.2f}" + "%" + " | Should be wrong (vol clustering actually tends to push it up from the sim default of 0)")
 print("K: " + f"{actualKurt:.6f}" + " | " + f"{kurt:.6f}" + " | " + kurtDir + f"{kurtError:.2f}" + "%" + "  | Should be > 3 due to vol clustering but not high enough")
 
 plt.figure(2)
 plt.rc("xtick",labelsize=10)
-plt.plot(range(simDays),simVols,label=model + " Conditional")
-plt.plot(range(simDays),constVols,label=model + " LR Implied")
-plt.plot(range(simDays),GARCHVols,label=model + " Realized")
+plt.plot(range(simDays),simVols,label=modelName + " Conditional")
+plt.plot(range(simDays),constVols,label=modelName + " LR Implied")
+plt.plot(range(simDays),GARCHVols,label=modelName + " Realized")
 plt.plot(range(simDays),realVols,label="Empirical Realized")
-plt.title(label=ticker + " Volatility")
+plt.title(label=ticker + " " + modelName + " Volatility")
 plt.legend()
 plt.show()
 
