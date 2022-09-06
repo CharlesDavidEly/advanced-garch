@@ -7,6 +7,9 @@ import scipy as sp
 
 
 
+# Specify the model
+model = "APARCH(1,1)"
+
 # Specify the sample
 ticker = "^GSPC"
 start = "2011-12-31"
@@ -29,9 +32,7 @@ var = vol**2
 skew = sp.stats.skew(returns)
 kurt = sp.stats.kurtosis(returns)
 
-
-
-def gjr_garch_mle(params):
+def aparch_mle(params):
 
     # Specify model parameters
     mu = params[0]
@@ -39,10 +40,11 @@ def gjr_garch_mle(params):
     alpha = params[2]
     gamma = params[3]
     beta = params[4]
+    delta = params[5]
 
     # Calculate long-run volatility
-    long_run_var = omega/(1 - alpha - gamma/2 - beta)
-    long_run_vol = long_run_var**(1/2)
+    long_run_var = omega/(1 - alpha * (1 - gamma)**delta - beta)
+    long_run_vol = long_run_var**(1/delta)
 
     # Calculate realized and conditional volatility
     resid = returns - mu
@@ -50,12 +52,12 @@ def gjr_garch_mle(params):
     conditional = np.zeros(len(returns))
     conditional[0] = long_run_vol
     for t in range(1,len(returns)):
-        conditional[t] = (omega + alpha*resid[t-1]**2 + beta*conditional[t-1]**2)**(1/2)
+        conditional[t] = (omega + alpha*(abs(resid[t-1]) - gamma*resid[t-1])**delta + beta*conditional[t-1]**delta)**(1/delta)
 
     # Calculate log-likelihood
     likelihood = 1/((2*np.pi)**(1/2)*conditional)*np.exp(-realized**2/(2*conditional**2))
-    log_likelihood = np.sum(np.log(likelihood))
-    return -log_likelihood
+    log_likelihood = -np.sum(np.log(likelihood))
+    return log_likelihood
 
 
 
@@ -63,7 +65,8 @@ def gjr_garch_mle(params):
 bMu = (-1,1)
 bOmega = (0,var)
 b = (0,1)
-res = sp.optimize.minimize(gjr_garch_mle, [median,0,0,0,0.75], bounds=(bMu,bOmega,b,b,b), method="Nelder-Mead")
+bDelta = (0,10)
+res = sp.optimize.minimize(aparch_mle, [median,0,0,0,0.75,2], bounds=(bMu,bOmega,b,b,b,bDelta), method="Nelder-Mead")
 # Alpha + gamma should = around 0.2
 
 # Retrieve optimal parameters
@@ -73,29 +76,31 @@ omega = res.x[1]
 alpha = res.x[2]
 gamma = res.x[3]
 beta = res.x[4]
+delta = res.x[5]
 log_likelihood = -float(res.fun)
 
 # Calculate realized and conditional volatility for optimal parameters
-suitTest = alpha + gamma/2 + beta
-long_run_var = omega/(1 - alpha - gamma/2 - beta)
-long_run_vol = (long_run_var)**(1/2)
+suitTest = alpha * (1 - gamma)**delta - beta
+long_run_var = omega/(1 - alpha * (1 - gamma)**delta - beta)
+long_run_vol = long_run_var**(1/delta)
 resid = returns - mu
 realized = abs(resid)
 conditional = np.zeros(len(returns))
 conditional[0] = long_run_vol
 for t in range(1,len(returns)):
-    conditional[t] = (omega + alpha*resid[t-1]**2 + beta*conditional[t-1]**2)**(1/2)
+    conditional[t] = (omega + alpha*(abs(resid[t-1]) - gamma*resid[t-1])**delta + beta*conditional[t-1]**delta)**(1/delta)
 
 # Print optimal parameters
-print(ticker + " GJR-GARCH(1,1) model parameters:")
-print("alpha + gamma/2 + beta " + str(round(suitTest,4)))
-print("mu " + str(round(mu,6)))
-print("omega " + str(round(omega,6)))
-print("alpha " + str(round(alpha,4)))
-print("gamma " + str(round(gamma,4)))
-print("beta " + str(round(beta,4)))
-print("long-run vol " + str(round(long_run_vol,4)))
-print("log-likelihood " + str(round(log_likelihood,4)))
+print(ticker + " " + model + " model parameters:")
+print("suit: " + str(round(suitTest,4)))
+print("mu: " + str(round(mu,6)))
+print("omega: " + str(round(omega,6)))
+print("alpha: " + str(round(alpha,4)))
+print("gamma: " + str(round(gamma,4)))
+print("beta: " + str(round(beta,4)))
+print("delta: " + str(round(delta,4)))
+print("long-run vol: " + str(round(long_run_vol,4)))
+print("log-likelihood: " + str(round(log_likelihood,4)))
 print("")
 
 # Visualize volatility
@@ -147,13 +152,13 @@ for t in range(simDays):
         i = 1
     else:
         i = 0
-    simVars[t] = omega + (alpha + gamma*i) * (lastResid)**2 + beta * lastVar
+    simVars[t] = omega + alpha*(abs(lastResid) - gamma*lastResid)**delta + beta*lastVol**delta
 
     # Assign other values
     realVols[t] = vol
     constVols[t] = long_run_vol
 
-    simVols[t] = (simVars[t])**(1/2)
+    simVols[t] = (simVars[t])**(1/delta)
     simZs[t] = sp.stats.norm.ppf(random_num())
     simPrices[t] = lastPrice * math.exp(drift + simVols[t]*simZs[t])
     simReturns[t] = simPrices[t]/lastPrice - 1
@@ -199,7 +204,7 @@ for t in range(simDays):
     GARCHVols[t] = actualSigma
 
 # Print Monte Carlo simulation
-print(ticker + " Monte Carlo Simulation (" + str(1) + " " + str(simDays) + "-Day Runs):")
+print(ticker + " " + model + " Monte Carlo Simulation (" + str(1) + " " + str(simDays) + "-Day Runs):")
 print("   Actual   | Expected  | Error    | Commentary")
 print("μ: " + f"{actualMu:.6f}" + " | " + f"{mean:.6f}" + "  | " + muDir + f"{muError:.2f}" + "%" + "   | Should be equal on average")
 print("σ: " + f"{actualSigma:.6f}" + " | " + f"{vol:.6f}" + "  | " + sigmaDir + f"{sigmaError:.2f}" + "%" + "   | Should be equal on average")
@@ -208,9 +213,9 @@ print("K: " + f"{actualKurt:.6f}" + " | " + f"{kurt:.6f}" + " | " + kurtDir + f"
 
 plt.figure(2)
 plt.rc("xtick",labelsize=10)
-plt.plot(range(simDays),simVols,label="GJR-GARCH(1,1) Conditional")
-plt.plot(range(simDays),constVols,label="GJR-GARCH(1,1) LR Implied")
-plt.plot(range(simDays),GARCHVols,label="GJR-GARCH(1,1) Realized")
+plt.plot(range(simDays),simVols,label=model + " Conditional")
+plt.plot(range(simDays),constVols,label=model + " LR Implied")
+plt.plot(range(simDays),GARCHVols,label=model + " Realized")
 plt.plot(range(simDays),realVols,label="Empirical Realized")
 plt.title(label=ticker + " Volatility")
 plt.legend()
