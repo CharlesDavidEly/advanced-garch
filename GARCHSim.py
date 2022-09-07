@@ -1,6 +1,4 @@
-from cmath import nan
 import math
-from pickle import TRUE
 import numpy as np
 import pandas as pd
 import yfinance as yf
