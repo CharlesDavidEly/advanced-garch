@@ -80,8 +80,9 @@ def run_simulation(prices,run,simDays):
     # Calculate realized and conditional volatility
     resid = returns - mu
     realized = abs(resid)
-    # CHANGE
-    long_run_vol = 0
+    # Calculate long-run volatility
+    long_run_var = omega/(1 - alpha - beta)
+    long_run_vol = long_run_var**(1/delta)
 
     # Get last realized period's needed data
     lastRealReturn = returns[-1]
@@ -100,8 +101,8 @@ def run_simulation(prices,run,simDays):
     # Start Monte Carlo simulation loop
     drift = mean - var/2
     simVars = np.zeros(simDays)
-    realVols = np.zeros(simDays)
-    constVols = np.zeros(simDays)
+    sampleEmpVols = np.zeros(simDays)
+    calcVols = np.zeros(simDays)
     simVols = np.zeros(simDays)
     simZs = np.zeros(simDays)
     simPrices = np.zeros(simDays)
@@ -112,8 +113,8 @@ def run_simulation(prices,run,simDays):
         simVars[t] = omega + alpha*(abs(lastResid) - gamma*lastResid)**delta + beta*lastVol**delta
 
         # Assign other values
-        realVols[t] = vol
-        constVols[t] = long_run_vol
+        sampleEmpVols[t] = vol
+        calcVols[t] = long_run_vol
 
         simVols[t] = (simVars[t])**(1/delta)
         simZs[t] = sp.stats.norm.ppf(random_num())
@@ -128,12 +129,12 @@ def run_simulation(prices,run,simDays):
         lastPrice = simPrices[t]
 
     # Calculate vol
-    constSimVol = np.std(simReturns)
-    constSimVols = np.zeros(simDays)
+    sampleSimVol = np.std(simReturns)
+    sampleSimVols = np.zeros(simDays)
     for t in range(simDays):
-        constSimVols[t] = constSimVol
+        sampleSimVols[t] = sampleSimVol
 
-    return (run[0],run[1],simPrices,simReturns,(simVols,constSimVols,constVols,realVols))
+    return (run[0],run[1],simPrices,simReturns,(simVols,calcVols,sampleSimVols,sampleEmpVols))
 
 def aparch_mle(params,*args):
 
@@ -241,19 +242,6 @@ def run_optimizer(tick,t0,tF,type,p,q,returns,initialGuesses):
     k = params.shape[0] + 1
     bic = k*np.log(returnNum) - 2*log_likelihood
     aic = 2*k - 2*log_likelihood
-
-    # Calculate realized and conditional volatility for optimal parameters
-    """
-    suitTest = alpha + beta
-    long_run_var = omega/(1 - alpha - beta)
-    long_run_vol = long_run_var**(1/delta)
-    resid = returns - mu
-    realized = abs(resid)
-    conditional = np.zeros(len(returns))
-    conditional[0] = long_run_vol
-    for t in range(1,len(returns)):
-        conditional[t] = (omega + alpha*(abs(resid[t-1]) - gamma*resid[t-1])**delta + beta*conditional[t-1]**delta)**(1/delta)
-    """
 
     return [[tick,t0,tF],[type,p,q],[initialGuesses],[omega,alpha,beta,gamma,mu,delta],[log_likelihood,bic,aic]]
 
@@ -428,6 +416,29 @@ def print_model_results(run):
 
 # FIX ALL FUNCTIONS PAST THIS POINT
 def generate_model_chart(run):
+
+    # Grab variables
+    modelType = str(run[1][0])
+    modelName = modelType+"("+str(run[1][1])+","+str(run[1][2])+")"
+    omega = run[3][0]
+    alpha = run[3][1]
+    beta = run[3][2]
+    gamma = run[3][3]
+    mu = run[3][4]
+    delta = run[3][5]
+
+    # Calculate realized and conditional volatility for optimal parameters
+    suitTest = alpha + beta
+    long_run_var = omega/(1 - alpha - beta)
+    long_run_vol = long_run_var**(1/delta)
+    resid = returns - mu
+    realized = abs(resid)
+    conditional = np.zeros(len(returns))
+    conditional[0] = long_run_vol
+    for t in range(1,len(returns)):
+        conditional[t] = (omega + alpha*(abs(resid[t-1]) - gamma*resid[t-1])**delta + beta*conditional[t-1]**delta)**(1/delta)
+
+    # Display chart
     plt.figure(1)
     plt.rc("xtick",labelsize=10)
     plt.plot(prices.index[1:],realized,label="Empirical Realized")
@@ -485,12 +496,22 @@ def print_simulation_results(returns,sim):
     print("")
 
 def generate_simulation_chart(sim):
+
+    # Grab variables
+    modelType = str(sim[1][0])
+    modelName = modelType+"("+str(sim[1][1])+","+str(sim[1][2])+")"
+    simVols = sim[4][0]
+    calcVols = sim[4][1]
+    sampleSimVols = sim[4][2]
+    sampleEmpVols = sim[4][3]
+
+    # Display chart
     plt.figure(2)
     plt.rc("xtick",labelsize=10)
     plt.plot(range(simDays),simVols,label=modelName + " Conditional")
-    plt.plot(range(simDays),constVols,label=modelName + " LR Implied")
-    plt.plot(range(simDays),GARCHVols,label=modelName + " Realized")
-    plt.plot(range(simDays),realVols,label="Empirical Realized")
+    plt.plot(range(simDays),calcVols,label=modelName + " LR Implied")
+    plt.plot(range(simDays),sampleSimVols,label=modelName + " Realized")
+    plt.plot(range(simDays),sampleEmpVols,label="Empirical Realized")
     plt.title(label=ticker + " " + modelName + " Volatility")
     plt.legend()
     plt.show()
@@ -562,15 +583,12 @@ for i in range(len(sortedResults)):
 """
 
 
-# Generate optimalRun output
+# Determine optimal model/parameters
 optimalRun = sortedResults[0]
 print_model_results(optimalRun)
-
-
+generate_model_chart(optimalRun)
 
 # Run Monte Carlo simulation
 mySim = run_simulation(prices,optimalRun,simDays)
-
-# Generate Monte Carlo output
 print_simulation_results(returns,mySim)
-
+generate_simulation_chart(mySim)
