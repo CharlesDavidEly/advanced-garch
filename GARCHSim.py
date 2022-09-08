@@ -81,7 +81,16 @@ def run_simulation(prices,run,simDays):
     resid = returns - mu
     realized = abs(resid)
     # Calculate long-run volatility
-    long_run_var = omega/(1 - alpha - beta)
+    """
+    downCount = 0
+    for t in range(len(returns)):
+        if returns[t] < mu:
+            downCount = downCount + 1
+    downProp = downCount/len(returns)
+    long_run_var = omega/(1 - alpha - gamma*downProp - beta)
+    """
+    long_run_var = omega/(1 - alpha - gamma/2 - beta)
+    #long_run_var = omega/(1 - alpha - beta)
     long_run_vol = long_run_var**(1/delta)
 
     # Get last realized period's needed data
@@ -168,7 +177,16 @@ def aparch_mle(params,*args):
             delta = params[5]
 
     # Calculate long-run volatility
-    long_run_var = omega/(1 - alpha - beta)
+    """
+    downCount = 0
+    for t in range(len(returns)):
+        if returns[t] < mu:
+            downCount = downCount + 1
+    downProp = downCount/len(returns)
+    long_run_var = omega/(1 - alpha - gamma*downProp - beta)
+    """
+    long_run_var = omega/(1 - alpha - gamma/2 - beta)
+    #long_run_var = omega/(1 - alpha - beta)
     long_run_vol = long_run_var**(1/delta)
 
     # Calculate realized and conditional volatility
