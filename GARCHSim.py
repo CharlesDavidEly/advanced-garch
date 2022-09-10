@@ -24,7 +24,7 @@ doAPARCH = True
 sortBy = "BIC"
 
 # Specify the simulation days
-simDays = 100000
+simDays = 1000000
 '''
 '''
 
@@ -53,103 +53,20 @@ def random_num():
         randNum = np.random.rand()
     return randNum
 
-def run_simulation(prices,run,simDays):
+def uncond_vol(omega,alpha,beta,gamma,delta):
+    #uncondVar = omega/(1 - alpha - beta)
+    uncondVar = omega/(1 - alpha - gamma/2 - beta)
+    uncondVol = uncondVar**(1/delta)
+    return uncondVol
 
-    # Get returns
-    returns = np.array(prices)[1:]/np.array(prices)[:-1] - 1
-
-    # Get needed data stats
-    mean = np.average(returns)
-    median = np.median(returns)
-    vol = np.std(returns)
-    var = vol**2
-    skew = sp.stats.skew(returns)
-    kurt = sp.stats.kurtosis(returns)
-
-    # Get param list
-    params = run[3]
-
-    # Get params
-    omega = params[0]
-    alpha = params[1]
-    beta = params[2]
-    gamma = params[3]
-    mu = params[4]
-    delta = params[5]
-
-    # Calculate realized and conditional volatility
-    resid = returns - mu
-    realized = abs(resid)
-    # Calculate long-run volatility
-    """
-    downCount = 0
-    for t in range(len(returns)):
-        if returns[t] < mu:
-            downCount = downCount + 1
-    downProp = downCount/len(returns)
-    long_run_var = omega/(1 - alpha - gamma*downProp - beta)
-    """
-    long_run_var = omega/(1 - alpha - gamma/2 - beta)
-    #long_run_var = omega/(1 - alpha - beta)
-    long_run_vol = long_run_var**(1/delta)
-
-    # Get last realized period's needed data
-    lastRealReturn = returns[-1]
-    lastRealResid = lastRealReturn - mu
-    lastRealVol = realized[-1]
-    lastRealVar = (lastRealVol)**2
-    lastRealPrice = prices[-1]
-
-    # Assign first lookback values
-    lastReturn = lastRealReturn
-    lastResid = lastRealResid
-    lastVol = lastRealVol
-    lastVar = lastRealVar
-    lastPrice = lastRealPrice
-
-    # Start Monte Carlo simulation loop
-    drift = mean - var/2
-    simVars = np.zeros(simDays)
-    sampleEmpVols = np.zeros(simDays)
-    calcVols = np.zeros(simDays)
-    simVols = np.zeros(simDays)
-    simZs = np.zeros(simDays)
-    simPrices = np.zeros(simDays)
-    simReturns = np.zeros(simDays)
-    for t in range(simDays):
-        
-        # Determine this period's var
-        simVars[t] = omega + alpha*(abs(lastResid) - gamma*lastResid)**delta + beta*lastVol**delta
-
-        # Assign other values
-        sampleEmpVols[t] = vol
-        calcVols[t] = long_run_vol
-
-        simVols[t] = (simVars[t])**(1/delta)
-        simZs[t] = sp.stats.norm.ppf(random_num())
-        simPrices[t] = lastPrice * math.exp(drift + simVols[t]*simZs[t])
-        simReturns[t] = simPrices[t]/lastPrice - 1
-
-        # Reset last values
-        lastReturn = simReturns[t]
-        lastResid = lastReturn - mu
-        lastVol = simVols[t]
-        lastVar = simVars[t]
-        lastPrice = simPrices[t]
-
-    # Calculate vol
-    sampleSimVol = np.std(simReturns)
-    sampleSimVols = np.zeros(simDays)
-    for t in range(simDays):
-        sampleSimVols[t] = sampleSimVol
-
-    return (run[0],run[1],simPrices,simReturns,(simVols,calcVols,sampleSimVols,sampleEmpVols))
+def cond_vol(omega,alpha,beta,gamma,delta,lastResid,lastCond):
+    condVol = (omega + alpha*(abs(lastResid) - gamma*lastResid)**delta + beta*lastCond**delta)**(1/delta)
+    return condVol
 
 def aparch_mle(params,*args):
 
     # Isolate returns
     returns = args[0]
-
     # Specify model parameters
     omega = params[0]
     alpha = params[1]
@@ -170,35 +87,23 @@ def aparch_mle(params,*args):
             mu = params[4]
             delta = args[4]
         case "APARCH":
-            # Change number here
             beta = params[2]
             gamma = params[3]
             mu = params[4]
             delta = params[5]
 
-    # Calculate long-run volatility
-    """
-    downCount = 0
-    for t in range(len(returns)):
-        if returns[t] < mu:
-            downCount = downCount + 1
-    downProp = downCount/len(returns)
-    long_run_var = omega/(1 - alpha - gamma*downProp - beta)
-    """
-    long_run_var = omega/(1 - alpha - gamma/2 - beta)
-    #long_run_var = omega/(1 - alpha - beta)
-    long_run_vol = long_run_var**(1/delta)
-
+    # Calculate unconditional volatility
+    uncondVol = uncond_vol(omega,alpha,beta,gamma,delta)
     # Calculate realized and conditional volatility
-    resid = returns - mu
-    realized = abs(resid)
-    conditional = np.zeros(len(returns))
-    conditional[0] = long_run_vol
+    resids = returns - mu
+    realVols = abs(resids)
+    condVols = np.zeros(len(returns))
+    condVols[0] = uncondVol
     for t in range(1,len(returns)):
-        conditional[t] = (omega + alpha*(abs(resid[t-1]) - gamma*resid[t-1])**delta + beta*conditional[t-1]**delta)**(1/delta)
+        condVols[t] = cond_vol(omega,alpha,beta,gamma,delta,resids[t-1],condVols[t-1])
 
     # Calculate log-likelihood
-    likelihood = 1/((2*np.pi)**(1/2)*conditional)*np.exp(-realized**2/(2*conditional**2))
+    likelihood = 1/((2*np.pi)**(1/2)*condVols)*np.exp(-realVols**2/(2*condVols**2))
     log_likelihood = -np.sum(np.log(likelihood))
     return log_likelihood
 
@@ -207,11 +112,8 @@ def run_optimizer(tick,t0,tF,type,p,q,returns,initialGuesses):
     # Starting parameter values (sample μ and σ)
     returnNum = returns.shape[0]
     mean = np.average(returns)
-    median = np.median(returns)
     vol = np.std(returns)
     var = vol**2
-    skew = sp.stats.skew(returns)
-    kurt = sp.stats.kurtosis(returns)
 
     # Handle bounds (later constraints)
     bMu = (-1,1)
@@ -394,6 +296,73 @@ def run_model(modelType,pGARCH,qGARCH):
 
     return myResults
 
+def run_simulation(prices,run,simDays):
+
+    # Get returns
+    returns = np.array(prices)[1:]/np.array(prices)[:-1] - 1
+    # Get needed data stats
+    mean = np.average(returns)
+    vol = np.std(returns)
+    var = vol**2
+    # Get param list
+    params = run[3]
+    # Get params
+    omega = params[0]
+    alpha = params[1]
+    beta = params[2]
+    gamma = params[3]
+    mu = params[4]
+    delta = params[5]
+
+    # Calculate realized and conditional volatility
+    #resids = returns - mu
+    #realVols = abs(resids)
+    # Calculate unconditional volatility
+    uncondVol = uncond_vol(omega,alpha,beta,gamma,delta)
+
+    # Get last realized period's needed data
+    lastRealReturn = returns[-1]
+    lastRealResid = lastRealReturn - mu
+    lastRealVol = abs(lastRealResid)
+    lastRealPrice = prices[-1]
+    # Assign first lookback values
+    lastReturn = lastRealReturn
+    lastResid = lastRealResid
+    lastVol = lastRealVol
+    lastPrice = lastRealPrice
+    # Set up Monte Carlo data structures
+    drift = mean - var/2
+    realVols = np.zeros(simDays)
+    uncondVols = np.zeros(simDays)
+    condVols = np.zeros(simDays)
+    simZs = np.zeros(simDays)
+    simPrices = np.zeros(simDays)
+    simReturns = np.zeros(simDays)
+
+    # Start Monte Carlo simulation loop
+    for t in range(simDays):
+        # Assign constant values
+        realVols[t] = vol
+        uncondVols[t] = uncondVol
+        # Assign other values
+        condVols[t] = cond_vol(omega,alpha,beta,gamma,delta,lastResid,lastVol)
+        simZs[t] = sp.stats.norm.ppf(random_num())
+        simPrices[t] = lastPrice * math.exp(drift + condVols[t]*simZs[t])
+        simReturns[t] = simPrices[t]/lastPrice - 1
+        # Reset last values
+        lastReturn = simReturns[t]
+        lastResid = lastReturn - mu
+        lastVol = condVols[t]
+        lastPrice = simPrices[t]
+
+    # Calculate conditional GARCH sample vol
+    sampleSimVol = np.std(simReturns)
+    sampleSimVols = np.zeros(simDays)
+    for t in range(simDays):
+        sampleSimVols[t] = sampleSimVol
+
+    return (run[0],run[1],simPrices,simReturns,(condVols,uncondVols,sampleSimVols,realVols))
+
 def print_model_results(run):
 
     # Grab sim data
@@ -446,21 +415,19 @@ def generate_model_chart(run):
     delta = run[3][5]
 
     # Calculate realized and conditional volatility for optimal parameters
-    suitTest = alpha + beta
-    long_run_var = omega/(1 - alpha - beta)
-    long_run_vol = long_run_var**(1/delta)
-    resid = returns - mu
-    realized = abs(resid)
-    conditional = np.zeros(len(returns))
-    conditional[0] = long_run_vol
+    uncondVol = uncond_vol(omega,alpha,beta,gamma,delta)
+    resids = returns - mu
+    realVols = abs(resids)
+    condVols = np.zeros(len(returns))
+    condVols[0] = uncondVol
     for t in range(1,len(returns)):
-        conditional[t] = (omega + alpha*(abs(resid[t-1]) - gamma*resid[t-1])**delta + beta*conditional[t-1]**delta)**(1/delta)
+        condVols[t] = cond_vol(omega,alpha,beta,gamma,delta,resids[t-1],condVols[t-1])
 
     # Display chart
     plt.figure(1)
     plt.rc("xtick",labelsize=10)
-    plt.plot(prices.index[1:],realized,label="Empirical Realized")
-    plt.plot(prices.index[1:],conditional,label=modelName + " Conditional")
+    plt.plot(prices.index[1:],realVols,label="Empirical Realized")
+    plt.plot(prices.index[1:],condVols,label=modelName + " Conditional")
     plt.title(label=ticker + " " + modelName + " Volatility")
     plt.legend()
     plt.show()
@@ -519,17 +486,17 @@ def generate_simulation_chart(sim):
     modelType = str(sim[1][0])
     modelName = modelType+"("+str(sim[1][1])+","+str(sim[1][2])+")"
     simVols = sim[4][0]
-    calcVols = sim[4][1]
+    uncondVols = sim[4][1]
     sampleSimVols = sim[4][2]
-    sampleEmpVols = sim[4][3]
+    realVols = sim[4][3]
 
     # Display chart
     plt.figure(2)
     plt.rc("xtick",labelsize=10)
     plt.plot(range(simDays),simVols,label=modelName + " Conditional")
-    plt.plot(range(simDays),calcVols,label=modelName + " LR Implied")
+    plt.plot(range(simDays),uncondVols,label=modelName + " Unconditional")
     plt.plot(range(simDays),sampleSimVols,label=modelName + " Realized")
-    plt.plot(range(simDays),sampleEmpVols,label="Empirical Realized")
+    plt.plot(range(simDays),realVols,label="Empirical Realized")
     plt.title(label=ticker + " " + modelName + " Volatility")
     plt.legend()
     plt.show()
